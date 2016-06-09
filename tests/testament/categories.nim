@@ -364,7 +364,11 @@ proc `&?.`(a, b: string): string =
   # candidate for the stdlib?
   result = if a.endswith(b): a else: a & b
 
-proc processCategory(r: var TResults, cat: Category, options: string, fileGlob: string = "t*.nim") =
+proc processCategory(
+    r: var TResults, cat: Category, options: string,
+    fileGlob: string = "t*.nim"): seq[TTest] =
+  result = @[]
+
   case cat.string.normalize
   of "rodfiles":
     discard # Disabled for now
@@ -405,4 +409,4 @@ proc processCategory(r: var TResults, cat: Category, options: string, fileGlob: 
     discard # TODO: Move untestable tests to someplace else, i.e. nimble repo.
   else:
     for name in os.walkFiles("tests" & DirSep &.? cat.string / fileGlob):
-      testSpec r, makeTest(name, options, cat)
+      result.add(makeTest(name, options, cat))

@@ -12,7 +12,7 @@
 import
   parseutils, strutils, pegs, os, osproc, streams, parsecfg, json,
   marshal, backend, parseopt, specs, htmlgen, browsers, terminal,
-  algorithm, compiler/nodejs, re, times
+  algorithm, compiler/nodejs, re, times, sequtils,threadpool
 
 const
   resultsFile = "testresults.html"
@@ -50,21 +50,24 @@ type
     action: TTestAction
     startTime: float
 
+  TResult = tuple[test: TTest,  expected, given: string, success: TResultEnum]
+
 # ----------------------------------------------------------------------------
 
-let
-  pegLineError =
-    peg"{[^(]*} '(' {\d+} ', ' {\d+} ') ' ('Error') ':' \s* {.*}"
-  pegLineTemplate =
-    peg"{[^(]*} '(' {\d+} ', ' {\d+} ') ' 'template/generic instantiation from here'.*"
-  pegOtherError = peg"'Error:' \s* {.*}"
-  pegSuccess = peg"'Hint: operation successful'.*"
-  pegOfInterest = pegLineError / pegOtherError
 
 var targets = {low(TTarget)..high(TTarget)}
 
 proc callCompiler(cmdTemplate, filename, options: string,
                   target: TTarget): TSpec =
+  let
+    pegLineError =
+      peg"{[^(]*} '(' {\d+} ', ' {\d+} ') ' ('Error') ':' \s* {.*}"
+    pegLineTemplate =
+      peg"{[^(]*} '(' {\d+} ', ' {\d+} ') ' 'template/generic instantiation from here'.*"
+    pegOtherError = peg"'Error:' \s* {.*}"
+    pegSuccess = peg"'Hint: operation successful'.*"
+    pegOfInterest = pegLineError / pegOtherError
+
   let c = parseCmdLine(cmdTemplate % ["target", targetToCmd[target],
                        "options", options, "file", filename.quoteShell])
   var p = startProcess(command=c[0], args=c[1.. ^1],
@@ -187,28 +190,27 @@ proc addResult(r: var TResults, test: TTest,
     discard waitForExit(p)
     close(p)
 
-proc cmpMsgs(r: var TResults, expected, given: TSpec, test: TTest) =
+proc cmpMsgs(expected, given: TSpec, test: TTest): TResult =
   if strip(expected.msg) notin strip(given.msg):
-    r.addResult(test, expected.msg, given.msg, reMsgsDiffer)
+    return (test, expected.msg, given.msg, reMsgsDiffer)
   elif expected.tfile == "" and extractFilename(expected.file) != extractFilename(given.file) and
       "internal error:" notin expected.msg:
-    r.addResult(test, expected.file, given.file, reFilesDiffer)
+    return (test, expected.file, given.file, reFilesDiffer)
   elif expected.line   != given.line   and expected.line   != 0 or
        expected.column != given.column and expected.column != 0:
-    r.addResult(test, $expected.line & ':' & $expected.column,
+    return (test, $expected.line & ':' & $expected.column,
                       $given.line    & ':' & $given.column,
                       reLinesDiffer)
   elif expected.tfile != "" and extractFilename(expected.tfile) != extractFilename(given.tfile) and
       "internal error:" notin expected.msg:
-    r.addResult(test, expected.tfile, given.tfile, reFilesDiffer)
+    return (test, expected.tfile, given.tfile, reFilesDiffer)
   elif expected.tline   != given.tline   and expected.tline   != 0 or
        expected.tcolumn != given.tcolumn and expected.tcolumn != 0:
-    r.addResult(test, $expected.tline & ':' & $expected.tcolumn,
+    return (test, $expected.tline & ':' & $expected.tcolumn,
                       $given.tline    & ':' & $given.tcolumn,
                       reLinesDiffer)
   else:
-    r.addResult(test, expected.msg, given.msg, reSuccess)
-    inc(r.passed)
+    return (test, expected.msg, given.msg, reSuccess)
 
 proc generatedFile(path, name: string, target: TTarget): string =
   let ext = targetToExt[target]
@@ -244,8 +246,7 @@ proc makeDeterministic(s: string): string =
   sort(x, system.cmp)
   result = join(x, "\n")
 
-proc compilerOutputTests(test: TTest, given: var TSpec, expected: TSpec;
-                         r: var TResults) =
+proc compilerOutputTests(test: TTest, given: var TSpec, expected: TSpec): TResult =
   var expectedmsg: string = ""
   var givenmsg: string = ""
   if given.err == reSuccess:
@@ -259,8 +260,7 @@ proc compilerOutputTests(test: TTest, given: var TSpec, expected: TSpec;
       nimoutCheck(test, expectedmsg, given)
   else:
     givenmsg = given.nimout.strip
-  if given.err == reSuccess: inc(r.passed)
-  r.addResult(test, expectedmsg, givenmsg, given.err)
+  return (test, expectedmsg, givenmsg, given.err)
 
 proc analyzeAndConsolidateOutput(s: string): string =
   result = ""
@@ -276,15 +276,13 @@ proc analyzeAndConsolidateOutput(s: string): string =
       result = substr(rows[i], pos)
       return
 
-proc testSpec(r: var TResults, test: TTest) =
+proc testSpec(test: TTest): TResult =
   # major entry point for a single test
   if test.target notin targets:
-    r.addResult(test, "", "", reIgnored)
-    inc(r.skipped)
-    return
+    return (test, "", "", reIgnored)
 
   let tname = test.name.addFileExt(".nim")
-  inc(r.total)
+
   var expected: TSpec
   if test.action != actionRunNoSpec:
     expected = parseSpec(tname)
@@ -293,16 +291,14 @@ proc testSpec(r: var TResults, test: TTest) =
     expected.action = actionRunNoSpec
 
   if expected.err == reIgnored:
-    r.addResult(test, "", "", reIgnored)
-    inc(r.skipped)
-    return
+    return (test, "", "", reIgnored)
 
   case expected.action
   of actionCompile:
     var given = callCompiler(expected.cmd, test.name,
       test.options & " --stdout --hint[Path]:off --hint[Processing]:off",
       test.target)
-    compilerOutputTests(test, given, expected, r)
+    return compilerOutputTests(test, given, expected)
   of actionRun, actionRunNoSpec:
     # In this branch of code "early return" pattern is clearer than deep
     # nested conditionals - the empty rows in between to clarify the "danger"
@@ -310,8 +306,8 @@ proc testSpec(r: var TResults, test: TTest) =
                              test.target)
 
     if given.err != reSuccess:
-      r.addResult(test, "", given.msg, given.err)
-      return
+      return (test, "", given.msg, given.err)
+
 
     let isJsTarget = test.target == targetJS
     var exeFile: string
@@ -322,42 +318,46 @@ proc testSpec(r: var TResults, test: TTest) =
       exeFile = changeFileExt(tname, ExeExt)
 
     if not existsFile(exeFile):
-      r.addResult(test, expected.outp, "executable not found", reExeNotFound)
-      return
+      return (test, expected.outp, "executable not found", reExeNotFound)
 
     let nodejs = if isJsTarget: findNodeJs() else: ""
     if isJsTarget and nodejs == "":
-      r.addResult(test, expected.outp, "nodejs binary not in PATH",
-                  reExeNotFound)
-      return
+      return (test, expected.outp, "nodejs binary not in PATH",
+                     reExeNotFound)
 
     let exeCmd = (if isJsTarget: nodejs & " " else: "") & exeFile
+    echo exeCmd
     var (buf, exitCode) = execCmdEx(exeCmd, options = {poStdErrToStdOut})
     let bufB = if expected.sortoutput: makeDeterministic(strip(buf.string))
                else: strip(buf.string)
     let expectedOut = strip(expected.outp)
 
     if exitCode != expected.exitCode:
-      r.addResult(test, "exitcode: " & $expected.exitCode,
+      return (test, "exitcode: " & $expected.exitCode,
                         "exitcode: " & $exitCode & "\n\nOutput:\n" &
                         analyzeAndConsolidateOutput(bufB),
                         reExitCodesDiffer)
-      return
 
     if bufB != expectedOut and expected.action != actionRunNoSpec:
       if not (expected.substr and expectedOut in bufB):
         given.err = reOutputsDiffer
-        r.addResult(test, expected.outp, bufB, reOutputsDiffer)
-        return
+        return (test, expected.outp, bufB, reOutputsDiffer)
 
-    compilerOutputTests(test, given, expected, r)
-    return
+    return compilerOutputTests(test, given, expected)
 
   of actionReject:
     var given = callCompiler(expected.cmd, test.name, test.options,
                              test.target)
-    cmpMsgs(r, expected, given, test)
-    return
+    return cmpMsgs(expected, given, test)
+
+proc testSpec2(test: seq[TTest]): seq[TResult] =
+  result = @[]
+  for x in test:
+    result.add(testSpec(x))
+
+proc testSpec(r: var TResults, test: TTest) =
+  let res = testSpec(test)
+  r.addResult(res.test, res.expected, res.given, res.success)
 
 proc testNoSpec(r: var TResults, test: TTest) =
   # does not extract the spec because the file is not supposed to have any
@@ -417,6 +417,8 @@ proc main() =
   var action = p.key.string.normalize
   p.next()
   var r = initResults()
+
+  var tests: seq[seq[TTest]] = @[]
   case action
   of "all":
     let testsDir = "tests" & DirSep
@@ -424,18 +426,18 @@ proc main() =
       assert testsDir.startsWith(testsDir)
       let cat = dir[testsDir.len .. ^1]
       if kind == pcDir and cat notin ["testament", "testdata", "nimcache"]:
-        processCategory(r, Category(cat), p.cmdLineRest.string)
+        tests.add(processCategory(r, Category(cat), p.cmdLineRest.string))
     for a in AdditionalCategories:
-      processCategory(r, Category(a), p.cmdLineRest.string)
+      tests.add(processCategory(r, Category(a), p.cmdLineRest.string))
   of "c", "cat", "category":
     var cat = Category(p.key)
     p.next
-    processCategory(r, cat, p.cmdLineRest.string)
+    tests.add(processCategory(r, cat, p.cmdLineRest.string))
   of "r", "run":
     let (dir, file) = splitPath(p.key.string)
     let (_, subdir) = splitPath(dir)
     var cat = Category(subdir)
-    processCategory(r, cat, p.cmdLineRest.string, file)
+    tests.add(processCategory(r, cat, p.cmdLineRest.string, file))
   of "html":
     var commit = 0
     discard parseInt(p.cmdLineRest.string, commit)
@@ -443,6 +445,15 @@ proc main() =
     generateJson(jsonFile, commit)
   else:
     quit Usage
+
+  var res = newSeq[FlowVar[seq[TResult]]](tests.len)
+
+  for i in 0..<tests.len:
+    res[i] = spawn testSpec2(tests[i])
+
+  for resx in res:
+    for x in ^resx:
+      r.addResult(x.test, x.expected, x.given, x.success)
 
   if optPrintResults:
     if action == "html": openDefaultBrowser(resultsFile)
