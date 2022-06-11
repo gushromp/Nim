@@ -3107,9 +3107,9 @@ when defined(macosx):
 
   # a really hacky solution: since we like to include 2 headers we have to
   # define two procs which in reality are the same
-  proc getExecPath1(c: cstring, size: var cuint32) {.
-    importc: "_NSGetExecutablePath", header: "<sys/param.h>".}
-  proc getExecPath2(c: cstring, size: var cuint32): bool {.
+  # proc getExecPath1(c: cstring, size: var cuint32) {.
+    # importc: "_NSGetExecutablePath", header: "<sys/param.h>".}
+  proc getExecPath1(c: cstring, size: var cuint32): bool {.
     importc: "_NSGetExecutablePath", header: "<mach-o/dyld.h>".}
 
 when defined(haiku):
@@ -3172,9 +3172,9 @@ proc getAppFilename*(): string {.rtl, extern: "nos$1", tags: [ReadIOEffect], noW
           break
   elif defined(macosx):
     var size = cuint32(0)
-    getExecPath1(nil, size)
+    discard getExecPath1(nil, size)
     result = newString(int(size))
-    if getExecPath2(result, size):
+    if getExecPath1(result, size):
       result = "" # error!
     if result.len > 0:
       result = result.expandFilename

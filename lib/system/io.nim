@@ -668,13 +668,15 @@ when defined(posix) and not defined(nimscript):
       ## Test for a directory.
       (m and 0o170000) == 0o40000
 
-  else:
+  elif defined(macosx):
     type
       Mode {.importc: "mode_t", header: "<sys/types.h>".} = cint
 
       Stat {.importc: "struct stat",
                header: "<sys/stat.h>", final, pure.} = object ## struct stat
+        filler_1: array[8, char]
         st_mode: Mode        ## Mode of file
+        filler_2: array[144 - 8 - 2, char]
 
     proc modeIsDir(m: Mode): bool {.importc: "S_ISDIR", header: "<sys/stat.h>".}
       ## Test for a directory.

@@ -15,16 +15,16 @@ runnableExamples:
 
 include "system/inclrtl"
 
-when defined(posix) and not (defined(macosx) or defined(bsd)):
+when defined(posix) and not defined(bsd):
   import posix
 
-when defined(freebsd) or defined(macosx):
+when defined(freebsd):
   {.emit: "#include <sys/types.h>".}
 
 when defined(openbsd) or defined(netbsd):
   {.emit: "#include <sys/param.h>".}
 
-when defined(macosx) or defined(bsd):
+when defined(bsd):
   # we HAVE to emit param.h before sysctl.h so we cannot use .header here
   # either. The amount of archaic bullshit in Poonix based OSes is just insane.
   {.emit: "#include <sys/sysctl.h>".}
@@ -35,6 +35,9 @@ when defined(macosx) or defined(bsd):
   proc sysctl(x: ptr array[0..3, cint], y: cint, z: pointer,
               a: var csize_t, b: pointer, c: csize_t): cint {.
               importc: "sysctl", nodecl.}
+
+when defined(macosx):
+  proc sysctlbyname(name: cstring, dest: pointer, destLen: ptr csize_t, src: pointer, srcLen: csize_t): cint {.importc: "sysctlbyname", header: "<sys/sysctl.h>".}
 
 when defined(genode):
   include genode/env
@@ -73,7 +76,7 @@ proc countProcessors*(): int {.rtl, extern: "ncpi$1".} =
       si: SYSTEM_INFO
     GetSystemInfo(si)
     result = si.dwNumberOfProcessors
-  elif defined(macosx) or defined(bsd):
+  elif defined(bsd):
     var
       mib: array[0..3, cint]
       numCPU: int
@@ -85,6 +88,16 @@ proc countProcessors*(): int {.rtl, extern: "ncpi$1".} =
       mib[1] = HW_NCPU
       discard sysctl(addr(mib), 2, addr(numCPU), len, nil, 0)
     result = numCPU
+  elif defined(macosx):
+    const name = "machdep.cpu.core_count"
+    var dest: int = 0
+    var destLen = sizeof(dest).csize_t
+
+    if sysctlbyname(name, addr dest, addr destLen, nil, 0) != 0:
+      result = 0
+    else:
+      result = dest
+      if result < 0: result = 0
   elif defined(hpux):
     result = mpctl(MPC_GETNUMSPUS, nil, nil)
   elif defined(irix):

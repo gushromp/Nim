@@ -32,24 +32,12 @@ type
 
   Dirent* {.importc: "struct dirent",
              header: "<dirent.h>", final, pure.} = object ## dirent_t struct
-    when defined(haiku):
-      d_dev*: Dev ## Device (not POSIX)
-      d_pdev*: Dev ## Parent device (only for queries) (not POSIX)
-    d_ino*: Ino  ## File serial number.
-    when defined(dragonfly):
-      # DragonflyBSD doesn't have `d_reclen` field.
-      d_type*: uint8
-    elif defined(linux) or defined(macosx) or defined(freebsd) or
-         defined(netbsd) or defined(openbsd) or defined(genode):
-      d_reclen*: cshort ## Length of this record. (not POSIX)
-      d_type*: int8 ## Type of file; not supported by all filesystem types.
-                    ## (not POSIX)
-      when defined(linux) or defined(openbsd):
-        d_off*: Off  ## Not an offset. Value that `telldir()` would return.
-    elif defined(haiku):
-      d_pino*: Ino ## Parent inode (only for queries) (not POSIX)
-      d_reclen*: cushort ## Length of this record. (not POSIX)
-
+    d_ino*: uint32 ## File number of entry.
+    d_reclen*: uint16 ## Length of this record. (not POSIX)
+    d_type*: uint8 ## Type of file; not supported by all filesystem types.
+                    ## (not POSIX)    
+    d_namlen*: uint8 ## Length of string in d_name 
+    
     d_name*: array[0..255, char] ## Name of entry.
 
   Tflock* {.importc: "struct flock", final, pure,
@@ -67,9 +55,13 @@ type
 
   Glob* {.importc: "glob_t", header: "<glob.h>",
            final, pure.} = object ## glob_t
-    gl_pathc*: int          ## Count of paths matched by pattern.
-    gl_pathv*: cstringArray ## Pointer to a list of matched pathnames.
-    gl_offs*: int           ## Slots to reserve at the beginning of gl_pathv.
+      gl_pathc*: csize_t       ## Count of paths matched by pattern.
+      gl_matchc*: cint         ## Count of paths matching pattern.
+      gl_offs*: csize_t        ## Slots to reserve at the beginning of gl_pathv.
+      gl_flags*: cint          ## Copy of flags parameter to glob
+      gl_pathv*: cstringArray  ## Pointer to a list of matched pathnames.
+      filler: array[4 * sizeof(csize_t), char]  ## For ABI compatibility
+    
 
   Group* {.importc: "struct group", header: "<grp.h>",
             final, pure.} = object ## struct group
@@ -136,7 +128,7 @@ type
   Fsfilcnt* {.importc: "fsfilcnt_t", header: "<sys/types.h>".} = int
   Gid* {.importc: "gid_t", header: "<sys/types.h>".} = int32
   Id* {.importc: "id_t", header: "<sys/types.h>".} = int
-  Ino* {.importc: "ino_t", header: "<sys/types.h>".} = int
+  Ino* {.importc: "ino_t", header: "<sys/types.h>".} = int32
   Key* {.importc: "key_t", header: "<sys/types.h>".} = int
   Mode* {.importc: "mode_t", header: "<sys/types.h>".} = (
     when defined(openbsd) or defined(netbsd):
@@ -208,6 +200,11 @@ type
     st_uid*: Uid          ## User ID of file.
     st_gid*: Gid          ## Group ID of file.
     st_rdev*: Dev         ## Device ID (if file is character or block special).
+    
+    st_atim* {.importc:"st_atimespec".}: Timespec  ## Time of last access.
+    st_mtim* {.importc:"st_mtimespec".}: Timespec  ## Time of last data modification.
+    st_ctim* {.importc:"st_ctimespec".}: Timespec  ## Time of last status change.
+
     st_size*: Off         ## For regular files, the file size in bytes.
                           ## For symbolic links, the length in bytes of the
                           ## pathname contained in the symbolic link.
@@ -215,23 +212,17 @@ type
                           ## For a typed memory object, the length in bytes.
                           ## For other file types, the use of this field is
                           ## unspecified.
-    when defined(osx):
-      st_atim* {.importc:"st_atimespec".}: Timespec  ## Time of last access.
-      st_mtim* {.importc:"st_mtimespec".}: Timespec  ## Time of last data modification.
-      st_ctim*  {.importc:"st_ctimespec".}: Timespec  ## Time of last status change.
-    elif StatHasNanoseconds:
-      st_atim*: Timespec  ## Time of last access.
-      st_mtim*: Timespec  ## Time of last data modification.
-      st_ctim*: Timespec  ## Time of last status change.
-    else:
-      st_atime*: Time     ## Time of last access.
-      st_mtime*: Time     ## Time of last data modification.
-      st_ctime*: Time     ## Time of last status change.
 
+    st_blocks*: Blkcnt    ## Number of blocks allocated for this object.
     st_blksize*: Blksize  ## A file system-specific preferred I/O block size
                           ## for this object. In some file system types, this
                           ## may vary from file to file.
-    st_blocks*: Blkcnt    ## Number of blocks allocated for this object.
+    
+    st_flags*: uint32     ## User defined flags for file.
+    st_gen*: uint32       ## File generation number.
+    st_lspare: int32      ## Reserved; do not use.
+    st_qspare: array[2, int64]  ## Reserved; do not use.
+    
 
 
   Statvfs* {.importc: "struct statvfs", header: "<sys/statvfs.h>",

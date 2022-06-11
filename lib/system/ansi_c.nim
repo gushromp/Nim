@@ -38,6 +38,15 @@ elif defined(linux) and defined(amd64):
   type
     C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>", bycopy.} = object
         abi: array[200 div sizeof(clong), clong]
+elif defined(macosx):
+  when defined(amd64):
+    type
+      C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>", bycopy.} = object
+          abi: array[(9 * 2) + 3 + 16, cint]
+  elif defined(arm64):
+    type
+      C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>", bycopy.} = object
+          abi: array[(14 + 8 + 2) * 2, cint]
 else:
   type
     C_JmpBuf* {.importc: "jmp_buf", header: "<setjmp.h>".} = object
